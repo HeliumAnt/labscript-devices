@@ -24,14 +24,43 @@ MAX_OFFSET = 5  # in V
 
 
 class HP33120A(IntermediateDevice):
-    allowed_children = [StaticAnalogQuantity] #StaticAnalogQuantity
+    allowed_children = [StaticAnalogQuantity]  # StaticAnalogQuantity
 
-    description = 'HP 33120A AWG'
+    description = "HP 33120A AWG"
 
-    @set_passed_properties(property_names={})
-    def __init__(self, name, GPIB_address, frequency, amplitude, offset, waveform, ext_trigger=False, **kwargs):
+    @set_passed_properties(
+        {
+            "connection_table_properties": [
+                "frequency",
+                "amplitude",
+                "offset",
+                "waveform",
+                "ext_trigger",
+            ],
+            "device_properties": [
+                "frequency",
+                "amplitude",
+                "offset",
+                "waveform",
+                "ext_trigger",
+            ],
+        }
+    )
+    def __init__(
+        self,
+        name,
+        GPIB_address,
+        frequency,
+        amplitude,
+        offset,
+        waveform,
+        ext_trigger=False,
+        **kwargs,
+    ):
 
-        IntermediateDevice.__init__(self, name, None, **kwargs) # Device.__init__(self, name, None, 'GPIB', **kwargs)
+        IntermediateDevice.__init__(
+            self, name, None, **kwargs
+        )  # Device.__init__(self, name, None, 'GPIB', **kwargs)
 
         self.instructions = {}
 
@@ -48,19 +77,45 @@ class HP33120A(IntermediateDevice):
                 self.waveform = waveform / abs_max
             else:
                 self.waveform = waveform
+        elif isinstance(waveform, str):
+            self.waveform = waveform
 
     def generate_code(self, hdf5_file):
         # do checks
 
         IntermediateDevice.generate_code(self, hdf5_file)
-        settings_table = np.empty(1, dtype={'names': ['frequency', 'amplitude', 'offset', 'waveform', 'ext_trigger'], 'formats': [np.int64, np.float32, np.float32, np.float32, np.bool_]})  # name the column header
+        settings_table = np.empty(
+            1,
+            dtype={
+                "names": [
+                    "frequency",
+                    "amplitude",
+                    "offset",
+                    "waveform",
+                    "ext_trigger",
+                ],
+                "formats": [
+                    np.int64,
+                    np.float32,
+                    np.float32,
+                    h5py.string_dtype(),
+                    np.bool_,
+                ],
+            },
+        )  # name the column header
 
         settings_table[0][0] = self.frequency
         settings_table[0][1] = self.amplitude
         settings_table[0][2] = self.offset
-        settings_table[0][3] = self.ext_trigger
+        settings_table[0][3] = ""
+        settings_table[0][4] = self.ext_trigger
 
-        wave_table = np.asarray(self.waveform)
+        wave_table = []
+
+        if isinstance(self.waveform, list):
+            wave_table = np.asarray(self.waveform)
+        else:
+            settings_table[0][3] = self.waveform
 
         grp = self.init_device_group(hdf5_file)
         grp.create_dataset('AWG_SETTINGS', compression=config.compression, data=settings_table)
@@ -121,6 +176,20 @@ class HP33120A_Tab(DeviceTab):
                                        'step': self.offset_base_step,
                                        'decimals': self.offset_base_decimals
                                        }
+        connection_table_entry = self.settings["connection_table"].find_by_name(
+            self.settings["device_name"]
+        )
+
+        properties = connection_table_entry.properties
+
+        for name in analog_properties.keys():
+            front_panel_settings = self.settings["front_panel_settings"]
+            if name not in front_panel_settings:
+                self.settings["front_panel_settings"][name] = {}
+            if "base_value" not in self.settings["front_panel_settings"][name]:
+                self.settings["front_panel_settings"][name]["base_value"] = properties[
+                    name
+                ]
 
         self.create_analog_outputs(analog_properties)
 
@@ -129,27 +198,26 @@ class HP33120A_Tab(DeviceTab):
         widget = QWidget()
         toolpalettegroup = ToolPaletteGroup(widget)
         toolpalette = toolpalettegroup.append_new_palette("Waveform")
-        self.waveInput = QLineEdit("[0]")
+        self.waveInput = QLineEdit(str(properties["waveform"]))
         self.waveInput.editingFinished.connect(self.setWaveForm)
         toolpalette.addWidget(self.waveInput, True)
         self.plotWidget = pg.PlotWidget()
         self.get_tab_layout().addWidget(widget)
 
         self.auto_place_widgets(ao_widgets)
-        connection_table_entry = self.settings['connection_table'].find_by_name(self.settings['device_name'])
         self.GPIB_address = connection_table_entry.BLACS_connection
         self.get_tab_layout().addWidget(self.plotWidget)
         self.setWaveForm()
 
     def restore_save_data(self, save_data):
-        if 'waveInput' in save_data:
-            self.waveInput.setText(save_data['waveInput'])
+        if "waveInput" in save_data:
+            self.waveInput.setText(save_data["waveInput"])
             self.setWaveForm()
         DeviceTab.restore_save_data(self, save_data)
 
     def get_save_data(self):
         save_data = DeviceTab.get_save_data(self)
-        save_data['waveInput'] = str(self.waveInput.text())
+        save_data["waveInput"] = str(self.waveInput.text())
         return save_data
 
     @define_state(MODE_MANUAL, True, delete_stale_states=True)
@@ -159,11 +227,11 @@ class HP33120A_Tab(DeviceTab):
 
     @define_state(MODE_MANUAL, True)
     def update_plot(self):
-        amplitude = self._AO['amplitude'].value
-        offset = self._AO['offset'].value
-        frequency = self._AO['frequency'].value
+        amplitude = self._AO["amplitude"].value
+        offset = self._AO["offset"].value
+        frequency = self._AO["frequency"].value
         values = self.values
-        return(amplitude, offset, frequency)
+        return (amplitude, offset, frequency)
         n_rep = 5
         plotXvalues = np.linspace(0, n_rep / frequency, len(values) * n_rep)
         plotYvalues = [value * amplitude + offset for value in values] * n_rep
@@ -174,8 +242,8 @@ class HP33120A_Tab(DeviceTab):
         expression = str(self.waveInput.text())
 
         sandbox = {}
-        exec('from pylab import *', sandbox, sandbox)
-        exec('from runmanager.functions import *', sandbox, sandbox)
+        exec("from pylab import *", sandbox, sandbox)
+        exec("from runmanager.functions import *", sandbox, sandbox)
         values = eval(expression, sandbox)
         if isinstance(values, list):
             abs_max = np.max(np.abs(values))
@@ -183,13 +251,13 @@ class HP33120A_Tab(DeviceTab):
                 self.values = values / abs_max
             else:
                 self.values = values
-            yield(self.queue_work(self._primary_worker, 'setWaveForm', self.values))
+            yield (self.queue_work(self._primary_worker, "setWaveForm", self.values))
             self.update_plot()
 
     @define_state(MODE_MANUAL, True)
     def transition_to_buffered(self, h5_filepath, notify_queue):
         # for remote worker to find correct find path:
-        if getattr(self, 'is_remote', False):
+        if getattr(self, "is_remote", False):
             h5_filepath = path_to_local(h5_filepath)
         DeviceTab.transition_to_buffered(self, h5_filepath, notify_queue)
         # stop the auto ramping in buffered mode
@@ -200,7 +268,7 @@ class HP33120A_Tab(DeviceTab):
         DeviceTab.transition_to_manual(self, notify_queue, program)
 
     def initialise_workers(self):
-        worker_initialisation_kwargs = {'GPIB_address': self.GPIB_address}
+        worker_initialisation_kwargs = {"GPIB_address": self.GPIB_address}
         self.create_worker("main_worker", HP33120A_Worker, worker_initialisation_kwargs)
         self.primary_worker = "main_worker"
 
@@ -209,7 +277,6 @@ from labscript_devices.GPIBDevice import GPIBWorker
 
 
 class HP33120A_Worker(GPIBWorker):
-
     def init(self):
         GPIBWorker.init(self)
         self.frequency = 10000
@@ -219,31 +286,41 @@ class HP33120A_Worker(GPIBWorker):
         self.ext_trigger = False
 
     def program_manual(self, front_panel_values):
-        frequency = front_panel_values['frequency']
-        amplitude = front_panel_values['amplitude']
-        offset = front_panel_values['offset']
+        frequency = front_panel_values["frequency"]
+        amplitude = front_panel_values["amplitude"]
+        offset = front_panel_values["offset"]
         self.send_GPIB_settings(frequency, amplitude, offset)
 
         return {}  # no need to adjust the values
 
-    def send_GPIB_settings(self, frequency=None, amplitude=None, offset=None, ext_trigger=False):
+    def send_GPIB_settings(
+        self, frequency=None, amplitude=None, offset=None, ext_trigger=False
+    ):
         # update the synthesizer with the given frequency and levelRange.
         # If an argument is None, the corresponding value will not be changed
         if frequency is not None:
             frequency = int(frequency)  # cast frequency to int!
             if frequency != self.frequency:
                 if not (frequency >= MIN_FREQUENCY and frequency < MAX_FREQUENCY):
-                    raise Exception("Frequency {:d} is out of range {:d} - {:d}. Is the frequency in Hz?".format(frequency, MIN_FREQUENCY, MAX_FREQUENCY))
+                    raise Exception(
+                        "Frequency {:d} is out of range {:d} - {:d}. Is the frequency in Hz?".format(
+                            frequency, MIN_FREQUENCY, MAX_FREQUENCY
+                        )
+                    )
 
                 self.GPIB_connection.write("FREQ {}".format(frequency))
                 self.frequency = frequency
 
         if amplitude is not None:
             amplitude = float(amplitude)  # cast frequency to int!
-            print('amp:',amplitude,self.amplitude)
+            print("amp:", amplitude, self.amplitude)
             if amplitude != self.amplitude:
                 if amplitude < MIN_VOLTAGE or amplitude > MAX_VOLTAGE:
-                    raise Exception("Amplitude {:.3f} is out of range {:.3f} - {:.3f}. Is the volatage in V?".format(amplitude, MIN_VOLTAGE, MAX_VOLTAGE))
+                    raise Exception(
+                        "Amplitude {:.3f} is out of range {:.3f} - {:.3f}. Is the volatage in V?".format(
+                            amplitude, MIN_VOLTAGE, MAX_VOLTAGE
+                        )
+                    )
 
                 self.GPIB_connection.write("VOLT {:.2f}".format(amplitude))
                 self.amplitude = amplitude
@@ -252,7 +329,11 @@ class HP33120A_Worker(GPIBWorker):
             offset = float(offset)  # cast frequency to int!
             if offset != self.offset:
                 if offset < MIN_OFFSET or offset > MAX_OFFSET:
-                    raise Exception("Offset voltage {:.3f} is out of range {:.3f} - {:.3f}. Is the offset volatage in V?".format(offset, MIN_VOLTAGE, MAX_VOLTAGE))
+                    raise Exception(
+                        "Offset voltage {:.3f} is out of range {:.3f} - {:.3f}. Is the offset volatage in V?".format(
+                            offset, MIN_VOLTAGE, MAX_VOLTAGE
+                        )
+                    )
 
                 self.GPIB_connection.write("VOLT:OFFS {:.3f}".format(offset))
                 self.offset = offset
@@ -267,43 +348,66 @@ class HP33120A_Worker(GPIBWorker):
 
     def setWaveForm(self, waveform):
         if self.wave != waveform:
-            if len(waveform) > 8:
-                sendString = "DATA VOLATILE"
-                for i, value in enumerate(waveform):
-                    sendString = "{0}, {1:.3f}".format(sendString, float(value))
-                self.GPIB_connection.write(sendString)
-                self.GPIB_connection.write("DATA:COPY LABSCRIP")
-                self.GPIB_connection.write("FUNC:USER LABSCRIP")
-                self.GPIB_connection.write("FUNC:SHAPE USER")
-                self.wave = waveform
-            elif len(waveform) < 8:
-                self.GPIB_connection.write("FUNC:USER BLACKMAN")
-                self.GPIB_connection.write("FUNC:SHAPE USER")
+            if isinstance(waveform, list):
+                if len(waveform) > 8:
+                    sendString = "DATA VOLATILE"
+                    for i, value in enumerate(waveform):
+                        sendString = "{0}, {1:.3f}".format(sendString, float(value))
+                    self.GPIB_connection.write(sendString)
+                    self.GPIB_connection.write("DATA:COPY LABSCRIP")
+                    self.GPIB_connection.write("FUNC:USER LABSCRIP")
+                    self.GPIB_connection.write("FUNC:SHAPE USER")
+                    self.wave = waveform
+                else:
+                    raise LabscriptError("Not enough entries in waveform.")
+            elif isinstance(waveform, str):
+                avail_waveform = (
+                    self.GPIB_connection.query("DATA:CAT?")
+                    .strip()
+                    .replace('"', "")
+                    .split(",")
+                )
+                if waveform in avail_waveform:
+                    print(f"Setting waveform: {waveform}")
+                    self.GPIB_connection.write(f"FUNC:USER {waveform}")
+                    self.GPIB_connection.write("FUNC:SHAPE USER")
+                else:
+                    raise LabscriptError(
+                        f"Invalid waveform selected: {waveform} available waveforms: {avail_waveform}"
+                    )
             else:
-                raise Exception('Waveform not correctly defined.')
+                raise ValueError("Invalid waveform type.")
 
     def transition_to_buffered(self, device_name, h5_filepath, initial_values, fresh):
         # for remote worker to find correct find path:
-        if getattr(self, 'is_remote', False):
+        if getattr(self, "is_remote", False):
             h5_filepath = path_to_local(h5_filepath)
 
-        frequency = initial_values['frequency']
-        amplitude = initial_values['amplitude']
-        offset = initial_values['offset']
+        frequency = initial_values["frequency"]
+        amplitude = initial_values["amplitude"]
+        offset = initial_values["offset"]
 
-        with h5py.File(h5_filepath, 'r') as hdf5_file:
-            group = hdf5_file['devices/'][device_name]
-            data = group.get('AWG_SETTINGS')
+        with h5py.File(h5_filepath, "r") as hdf5_file:
+            group = hdf5_file["devices/"][device_name]
+            data = group.get("AWG_SETTINGS")
             frequency = data[0][0]  # in Hz
             amplitude = data[0][1]  # in V
             offset = data[0][2]  # in V
-            ext_trigger = data[0][3]  # Bool
-            wave = list(group.get('AWG_WAVE'))
+            waveform = data[0][3]  # String
+            ext_trigger = data[0][4]  # Bool
+            wave = list(group.get("AWG_WAVE"))
 
         self.send_GPIB_settings(frequency, amplitude, offset, ext_trigger)
-        self.setWaveForm(wave)
+        if wave:
+            self.setWaveForm(wave)
+        else:
+            self.setWaveForm(waveform)
 
-        return {'frequency': float(frequency), 'amplitude': float(amplitude), 'offset': float(offset)}
+        return {
+            "frequency": float(frequency),
+            "amplitude": float(amplitude),
+            "offset": float(offset),
+        }
 
 
 @runviewer_parser
